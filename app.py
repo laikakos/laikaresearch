@@ -1,11 +1,11 @@
-import streamlit as st
-import pandas as pd
 from utils.text_processor import (
-    extract_text_from_docx, 
+    extract_text_from_docx,
+    extract_text_from_pdf,  # ← EKLE
     split_into_sentences,
     find_keyword_contexts,
     clean_text
 )
+
 from utils.models import analyze_text_with_all_models
 from utils.visualizer import (
     create_emotion_radar_chart,
@@ -57,17 +57,19 @@ tab1, tab2, tab3 = st.tabs(["📄 Dosya Yükle", "📊 Sonuçlar", "ℹ️ Hakk�
 with tab1:
     st.header("Dosya Yükleme")
     
-    uploaded_file = st.file_uploader(
-        "Almanca haber dosyanızı yükleyin (.txt veya .docx)",
-        type=['txt', 'docx']
-    )
+   uploaded_file = st.file_uploader(
+    "Almanca haber dosyanızı yükleyin (.txt, .docx veya .pdf)",
+    type=['txt', 'docx', 'pdf']  # ← pdf ekle
+)
     
     if uploaded_file:
-        # Dosyayı oku
-        if uploaded_file.name.endswith('.docx'):
-            text = extract_text_from_docx(uploaded_file)
-        else:
-            text = uploaded_file.read().decode('utf-8')
+    # Dosyayı oku
+    if uploaded_file.name.endswith('.docx'):
+        text = extract_text_from_docx(uploaded_file)
+    elif uploaded_file.name.endswith('.pdf'):  # ← EKLE
+        text = extract_text_from_pdf(uploaded_file)  # ← EKLE
+    else:
+        text = uploaded_file.read().decode('utf-8')
         
         text = clean_text(text)
         
