@@ -1,6 +1,7 @@
 import re
 from typing import List, Tuple
 import docx
+import PyPDF2
 
 def extract_text_from_docx(file):
     """DOCX dosyasından metin çıkar"""
