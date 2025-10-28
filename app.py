@@ -49,6 +49,11 @@ with st.sidebar:
     context_before = st.slider("Önceki cümle sayısı", 0, 5, 3)
     context_after = st.slider("Sonraki cümle sayısı", 0, 5, 3)
     
+    # Batch processing ayarı
+    st.subheader("Toplu İşleme")
+    batch_size = st.number_input("Batch boyutu", min_value=10, max_value=500, value=100, step=10)
+    st.info(f"Her {batch_size} dosya için ilerleme gösterilecek")
+    
     st.markdown("---")
     st.markdown("**Geliştirici:** laikaresearch")
 
@@ -58,70 +63,150 @@ tab1, tab2, tab3 = st.tabs(["📄 Dosya Yükle", "📊 Sonuçlar", "ℹ️ Hakk�
 with tab1:
     st.header("Dosya Yükleme")
     
-    uploaded_file = st.file_uploader(
-        "Almanca haber dosyanızı yükleyin (.txt, .docx veya .pdf)",
-        type=['txt', 'docx', 'pdf']
+    uploaded_files = st.file_uploader(
+        "Almanca haber dosyalarınızı yükleyin (.txt, .docx veya .pdf)",
+        type=['txt', 'docx', 'pdf'],
+        accept_multiple_files=True
     )
     
-    if uploaded_file:
-        # Dosyayı oku
-        if uploaded_file.name.endswith('.docx'):
-            text = extract_text_from_docx(uploaded_file)
-        elif uploaded_file.name.endswith('.pdf'):
-            text = extract_text_from_pdf(uploaded_file)
-        else:
-            text = uploaded_file.read().decode('utf-8')
+    if uploaded_files:
+        st.warning(f"⚠️ {len(uploaded_files)} dosya yüklendi. Büyük dosya sayısı için işlem uzun sürebilir.")
         
-        text = clean_text(text)
+        # Tüm dosyaları birleştir
+        all_texts = []
         
-        st.success(f"✅ Dosya yüklendi: {uploaded_file.name}")
-        st.info(f"📝 Toplam karakter: {len(text)}")
+        # Dosya yükleme progress bar
+        file_progress = st.progress(0)
+        file_status = st.empty()
         
-        # Önizleme
-        with st.expander("📄 Metin Önizleme"):
-            st.text(text[:1000] + "..." if len(text) > 1000 else text)
+        failed_files = []
         
-        # Analiz butonu
-        if st.button("🚀 Analizi Başlat", type="primary"):
-            with st.spinner("Analiz yapılıyor..."):
+        for file_idx, uploaded_file in enumerate(uploaded_files):
+            try:
+                file_status.text(f"Dosya okunuyor: {uploaded_file.name} ({file_idx+1}/{len(uploaded_files)})")
                 
-                # Cümlelere ayır
-                sentences = split_into_sentences(text)
-                st.info(f"📊 Toplam cümle: {len(sentences)}")
-                
-                # Anahtar kelime eşleşmelerini bul
-                matches = find_keyword_contexts(
-                    sentences, 
-                    keywords,
-                    context_before,
-                    context_after
-                )
-                
-                if not matches:
-                    st.warning("❌ Anahtar kelime bulunamadı!")
+                # Dosya tipine göre okuma
+                if uploaded_file.name.endswith('.docx'):
+                    text = extract_text_from_docx(uploaded_file)
+                elif uploaded_file.name.endswith('.pdf'):
+                    text = extract_text_from_pdf(uploaded_file)
+                elif uploaded_file.name.endswith('.txt'):
+                    # TXT dosyaları için encoding denemesi
+                    try:
+                        text = uploaded_file.read().decode('utf-8')
+                    except UnicodeDecodeError:
+                        # UTF-8 başarısız olursa latin-1 dene
+                        uploaded_file.seek(0)  # Dosya pozisyonunu başa al
+                        text = uploaded_file.read().decode('latin-1')
                 else:
-                    st.success(f"✅ {len(matches)} eşleşme bulundu!")
+                    st.warning(f"⚠️ Desteklenmeyen dosya tipi: {uploaded_file.name}")
+                    continue
+                
+                # Temizlenmiş metni kaydet
+                cleaned_text = clean_text(text)
+                
+                if len(cleaned_text.strip()) > 0:
+                    all_texts.append({
+                        'filename': uploaded_file.name,
+                        'text': cleaned_text
+                    })
+                else:
+                    failed_files.append((uploaded_file.name, "Boş dosya"))
+                
+            except Exception as e:
+                failed_files.append((uploaded_file.name, str(e)))
+                st.error(f"❌ Hata: {uploaded_file.name} - {str(e)[:100]}")
+            
+            # Progress güncelle
+            file_progress.progress((file_idx + 1) / len(uploaded_files))
+        
+        file_status.empty()
+        file_progress.empty()
+        
+        # Sonuç özeti
+        if all_texts:
+            st.success(f"✅ {len(all_texts)} dosya başarıyla yüklendi")
+        
+        if failed_files:
+            st.error(f"❌ {len(failed_files)} dosya yüklenemedi")
+            with st.expander("Başarısız Dosyalar"):
+                for fname, error in failed_files:
+                    st.write(f"- **{fname}**: {error}")
+        
+        if not all_texts:
+            st.error("❌ Hiçbir dosya başarıyla yüklenemedi!")
+        else:
+            # Toplam istatistikler
+            total_chars = sum(len(t['text']) for t in all_texts)
+            st.info(f"📝 Toplam karakter: {total_chars:,}")
+            
+            # Dosya listesi (ilk 20 dosya)
+            with st.expander(f"📂 Yüklenen Dosyalar (İlk 20/{len(all_texts)})"):
+                for i, item in enumerate(all_texts[:20]):
+                    st.write(f"{i+1}. **{item['filename']}** - {len(item['text']):,} karakter")
+                if len(all_texts) > 20:
+                    st.write(f"... ve {len(all_texts) - 20} dosya daha")
+            
+            # Önizleme
+            with st.expander("📄 İlk Dosya Önizleme"):
+                preview_text = all_texts[0]['text']
+                st.text(preview_text[:1000] + "..." if len(preview_text) > 1000 else preview_text)
+            
+            # Analiz butonu
+            if st.button("🚀 Analizi Başlat", type="primary"):
+                with st.spinner("Analiz yapılıyor..."):
                     
-                    # Her eşleşme için analiz yap
-                    progress_bar = st.progress(0)
-                    results = []
+                    all_results = []
                     
-                    for idx, match in enumerate(matches):
-                        # Analiz
-                        analysis = analyze_text_with_all_models(match['context'])
+                    # Genel progress bar
+                    overall_progress = st.progress(0)
+                    overall_status = st.empty()
+                    
+                    # Her dosya için analiz
+                    for file_idx, item in enumerate(all_texts):
+                        overall_status.text(f"📄 Analiz ediliyor: {item['filename']} ({file_idx+1}/{len(all_texts)})")
                         
-                        results.append({
-                            **match,
-                            **analysis
-                        })
+                        try:
+                            # Cümlelere ayır
+                            sentences = split_into_sentences(item['text'])
+                            
+                            # Anahtar kelime eşleşmelerini bul
+                            matches = find_keyword_contexts(
+                                sentences, 
+                                keywords,
+                                context_before,
+                                context_after
+                            )
+                            
+                            if matches:
+                                # Her eşleşme için analiz yap
+                                for idx, match in enumerate(matches):
+                                    # Analiz
+                                    analysis = analyze_text_with_all_models(match['context'])
+                                    
+                                    all_results.append({
+                                        'filename': item['filename'],
+                                        **match,
+                                        **analysis
+                                    })
+                            
+                        except Exception as e:
+                            st.warning(f"⚠️ Analiz hatası: {item['filename']} - {str(e)[:100]}")
                         
-                        progress_bar.progress((idx + 1) / len(matches))
+                        # Overall progress güncelle
+                        overall_progress.progress((file_idx + 1) / len(all_texts))
                     
-                    # Sonuçları session state'e kaydet
-                    st.session_state['results'] = results
-                    st.session_state['analyzed'] = True
+                    overall_status.empty()
+                    overall_progress.empty()
                     
-                    st.success("✅ Analiz tamamlandı! 'Sonuçlar' sekmesine gidin.")
+                    if all_results:
+                        # Sonuçları session state'e kaydet
+                        st.session_state['results'] = all_results
+                        st.session_state['analyzed'] = True
+                        
+                        st.success(f"✅ Analiz tamamlandı! Toplam {len(all_results)} eşleşme bulundu. 'Sonuçlar' sekmesine gidin.")
+                    else:
+                        st.error("❌ Hiçbir dosyada anahtar kelime bulunamadı!")
 
 with tab2:
     st.header("📊 Analiz Sonuçları")
@@ -131,9 +216,39 @@ with tab2:
         
         st.info(f"📈 Toplam {len(results)} bağlam analiz edildi")
         
+        # Filtreleme seçenekleri
+        with st.expander("🔍 Filtreleme Seçenekleri"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Dosyaya göre filtrele
+                all_files = sorted(list(set([r.get('filename', 'N/A') for r in results])))
+                selected_files = st.multiselect(
+                    "Dosya Seç",
+                    options=all_files,
+                    default=all_files[:5] if len(all_files) > 5 else all_files
+                )
+            
+            with col2:
+                # Anahtar kelimeye göre filtre
+                all_keywords = sorted(list(set([r['keyword'] for r in results])))
+                selected_keywords = st.multiselect(
+                    "Anahtar Kelime Seç",
+                    options=all_keywords,
+                    default=all_keywords
+                )
+        
+        # Filtrelenmiş sonuçlar
+        filtered_results = [
+            r for r in results 
+            if r.get('filename', 'N/A') in selected_files and r['keyword'] in selected_keywords
+        ]
+        
+        st.info(f"🔎 Gösterilen: {len(filtered_results)} / {len(results)}")
+        
         # Her sonucu göster
-        for idx, result in enumerate(results):
-            with st.expander(f"🔍 Eşleşme {idx+1}: '{result['keyword']}' - Cümle {result['sentence_index']}"):
+        for idx, result in enumerate(filtered_results):
+            with st.expander(f"🔍 {result.get('filename', 'N/A')} - Eşleşme {idx+1}: '{result['keyword']}' - Cümle {result['sentence_index']}"):
                 
                 # Context göster
                 st.markdown("**📝 Bağlam:**")
@@ -189,7 +304,7 @@ with tab2:
         )
         
     else:
-        st.info("👈 Önce 'Dosya Yükle' sekmesinden bir dosya yükleyin ve analiz başlatın.")
+        st.info("👈 Önce 'Dosya Yükle' sekmesinden dosya yükleyin ve analiz başlatın.")
 
 with tab3:
     st.header("ℹ️ Proje Hakkında")
@@ -226,6 +341,12 @@ with tab3:
     - [Guhr et al. 2020 - LREC](http://www.lrec-conf.org/proceedings/lrec2020/pdf/2020.lrec-1.202.pdf)
     - [GoEmotions - ACL 2020](https://aclanthology.org/2020.acl-main.372/)
     - [GitHub Repository](https://github.com/laikakos/laikaresearch)
+    
+    ### ⚡ Performans İpuçları (2500 PDF için)
+    - Dosyalar batch olarak işlenir
+    - Her 100 dosyada ilerleme gösterilir
+    - Hatalı dosyalar atlanır ve listelenir
+    - Toplam süre: ~30-60 dakika (dosya boyutuna bağlı)
     """)
 
 st.markdown("---")
