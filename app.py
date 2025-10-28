@@ -10,8 +10,12 @@ from utils.text_processor import (
 from utils.models import analyze_text_with_all_models
 from utils.visualizer import (
     create_emotion_radar_chart,
-    create_results_dataframe
+    create_results_dataframe,
+    create_sentiment_distribution_chart,
+    create_file_summary_chart,
+    create_keyword_summary_chart
 )
+import os
 
 # Sayfa ayarları
 st.set_page_config(
@@ -57,8 +61,16 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Geliştirici:** laikaresearch")
 
+# Dosya tipini kontrol eden yardımcı fonksiyon
+def get_file_extension(filename):
+    """Dosya uzantısını güvenli şekilde al"""
+    # Son noktadan sonrasını al (uzantı)
+    if '.' in filename:
+        return filename.rsplit('.', 1)[-1].lower()
+    return ''
+
 # Ana içerik
-tab1, tab2, tab3 = st.tabs(["📄 Dosya Yükle", "📊 Sonuçlar", "ℹ️ Hakkında"])
+tab1, tab2, tab3, tab4 = st.tabs(["📄 Dosya Yükle", "📊 Sonuçlar", "📈 İstatistikler", "ℹ️ Hakkında"])
 
 with tab1:
     st.header("Dosya Yükleme")
@@ -85,21 +97,28 @@ with tab1:
             try:
                 file_status.text(f"Dosya okunuyor: {uploaded_file.name} ({file_idx+1}/{len(uploaded_files)})")
                 
+                # Dosya uzantısını güvenli şekilde al
+                file_extension = get_file_extension(uploaded_file.name)
+                
                 # Dosya tipine göre okuma
-                if uploaded_file.name.endswith('.docx'):
+                if file_extension == 'docx':
                     text = extract_text_from_docx(uploaded_file)
-                elif uploaded_file.name.endswith('.pdf'):
+                elif file_extension == 'pdf':
                     text = extract_text_from_pdf(uploaded_file)
-                elif uploaded_file.name.endswith('.txt'):
+                elif file_extension == 'txt':
                     # TXT dosyaları için encoding denemesi
                     try:
                         text = uploaded_file.read().decode('utf-8')
                     except UnicodeDecodeError:
                         # UTF-8 başarısız olursa latin-1 dene
                         uploaded_file.seek(0)  # Dosya pozisyonunu başa al
-                        text = uploaded_file.read().decode('latin-1')
+                        try:
+                            text = uploaded_file.read().decode('latin-1')
+                        except:
+                            uploaded_file.seek(0)
+                            text = uploaded_file.read().decode('cp1252')  # Windows encoding
                 else:
-                    st.warning(f"⚠️ Desteklenmeyen dosya tipi: {uploaded_file.name}")
+                    failed_files.append((uploaded_file.name, f"Desteklenmeyen dosya tipi: .{file_extension}"))
                     continue
                 
                 # Temizlenmiş metni kaydet
@@ -209,7 +228,7 @@ with tab1:
                         st.error("❌ Hiçbir dosyada anahtar kelime bulunamadı!")
 
 with tab2:
-    st.header("📊 Analiz Sonuçları")
+    st.header("📊 Detaylı Sonuçlar")
     
     if 'analyzed' in st.session_state and st.session_state['analyzed']:
         results = st.session_state['results']
@@ -307,6 +326,140 @@ with tab2:
         st.info("👈 Önce 'Dosya Yükle' sekmesinden dosya yükleyin ve analiz başlatın.")
 
 with tab3:
+    st.header("📈 Genel İstatistikler ve Görselleştirmeler")
+    
+    if 'analyzed' in st.session_state and st.session_state['analyzed']:
+        results = st.session_state['results']
+        
+        # Özet metrikler
+        st.subheader("📊 Özet Metrikler")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Toplam Eşleşme", len(results))
+        
+        with col2:
+            unique_files = len(set([r.get('filename', 'N/A') for r in results]))
+            st.metric("Analiz Edilen Dosya", unique_files)
+        
+        with col3:
+            unique_keywords = len(set([r['keyword'] for r in results]))
+            st.metric("Bulunan Anahtar Kelime", unique_keywords)
+        
+        with col4:
+            avg_per_file = len(results) / unique_files if unique_files > 0 else 0
+            st.metric("Dosya Başına Ort. Eşleşme", f"{avg_per_file:.1f}")
+        
+        st.markdown("---")
+        
+        # Grafikler
+        st.subheader("📊 Görselleştirmeler")
+        
+        # 1. Sentiment Dağılımı
+        st.markdown("### 1️⃣ Sentiment Dağılımı (Model 1 & 2)")
+        fig_sentiment = create_sentiment_distribution_chart(results)
+        if fig_sentiment:
+            st.plotly_chart(fig_sentiment, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 2. Dosya Bazlı Analiz
+        st.markdown("### 2️⃣ Dosya Bazlı Eşleşme Sayıları")
+        fig_files = create_file_summary_chart(results)
+        if fig_files:
+            st.plotly_chart(fig_files, use_container_width=True)
+        
+        # Dosya detay tablosu
+        with st.expander("📂 Tüm Dosyalar - Detaylı Tablo"):
+            file_summary = {}
+            for r in results:
+                fname = r.get('filename', 'N/A')
+                if fname not in file_summary:
+                    file_summary[fname] = {
+                        'Eşleşme Sayısı': 0,
+                        'Positive (M1)': 0,
+                        'Negative (M1)': 0,
+                        'Neutral (M1)': 0
+                    }
+                file_summary[fname]['Eşleşme Sayısı'] += 1
+                sentiment = r.get('model_1', {}).get('sentiment', '').lower()
+                if 'positive' in sentiment:
+                    file_summary[fname]['Positive (M1)'] += 1
+                elif 'negative' in sentiment:
+                    file_summary[fname]['Negative (M1)'] += 1
+                elif 'neutral' in sentiment:
+                    file_summary[fname]['Neutral (M1)'] += 1
+            
+            file_df = pd.DataFrame.from_dict(file_summary, orient='index')
+            file_df = file_df.sort_values('Eşleşme Sayısı', ascending=False)
+            st.dataframe(file_df, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 3. Anahtar Kelime Analizi
+        st.markdown("### 3️⃣ Anahtar Kelime Bazlı Eşleşmeler")
+        fig_keywords = create_keyword_summary_chart(results)
+        if fig_keywords:
+            st.plotly_chart(fig_keywords, use_container_width=True)
+        
+        # Anahtar kelime detay tablosu
+        with st.expander("🔑 Anahtar Kelimeler - Detaylı Tablo"):
+            keyword_summary = {}
+            for r in results:
+                kw = r.get('keyword', 'N/A')
+                if kw not in keyword_summary:
+                    keyword_summary[kw] = {
+                        'Eşleşme Sayısı': 0,
+                        'Positive (M1)': 0,
+                        'Negative (M1)': 0,
+                        'Neutral (M1)': 0
+                    }
+                keyword_summary[kw]['Eşleşme Sayısı'] += 1
+                sentiment = r.get('model_1', {}).get('sentiment', '').lower()
+                if 'positive' in sentiment:
+                    keyword_summary[kw]['Positive (M1)'] += 1
+                elif 'negative' in sentiment:
+                    keyword_summary[kw]['Negative (M1)'] += 1
+                elif 'neutral' in sentiment:
+                    keyword_summary[kw]['Neutral (M1)'] += 1
+            
+            keyword_df = pd.DataFrame.from_dict(keyword_summary, orient='index')
+            keyword_df = keyword_df.sort_values('Eşleşme Sayısı', ascending=False)
+            st.dataframe(keyword_df, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 4. Model 3 - Top Duygular
+        st.markdown("### 4️⃣ En Sık Görülen Duygular (Model 3)")
+        all_emotions = {}
+        for r in results:
+            top_emotion = r.get('model_3', {}).get('top_emotions', [{}])[0]
+            emotion_label = top_emotion.get('label', 'unknown')
+            if emotion_label != 'unknown':
+                all_emotions[emotion_label] = all_emotions.get(emotion_label, 0) + 1
+        
+        if all_emotions:
+            emotion_series = pd.Series(all_emotions).sort_values(ascending=False)
+            
+            import plotly.graph_objects as go
+            fig_emotions = go.Figure()
+            fig_emotions.add_trace(go.Bar(
+                x=emotion_series.index[:15],  # Top 15
+                y=emotion_series.values[:15],
+                marker_color='purple'
+            ))
+            fig_emotions.update_layout(
+                title='En Sık Tespit Edilen 15 Duygu (Model 3)',
+                xaxis_title='Duygu',
+                yaxis_title='Frekans',
+                height=400
+            )
+            st.plotly_chart(fig_emotions, use_container_width=True)
+        
+    else:
+        st.info("👈 Önce 'Dosya Yükle' sekmesinden dosya yükleyin ve analiz başlatın.")
+
+with tab4:
     st.header("ℹ️ Proje Hakkında")
     
     st.markdown("""
@@ -347,6 +500,12 @@ with tab3:
     - Her 100 dosyada ilerleme gösterilir
     - Hatalı dosyalar atlanır ve listelenir
     - Toplam süre: ~30-60 dakika (dosya boyutuna bağlı)
+    
+    ### 📊 Yeni Özellikler
+    - **İstatistikler Sekmesi:** Genel görselleştirmeler ve trendler
+    - **Dosya Bazlı Analiz:** Her dosyanın detaylı sentiment dağılımı
+    - **Anahtar Kelime Analizi:** Hangi kelime ne kadar etkili
+    - **Model 3 Duygu Haritası:** En sık görülen 15 duygu
     """)
 
 st.markdown("---")
