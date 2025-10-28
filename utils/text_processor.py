@@ -8,6 +8,14 @@ def extract_text_from_docx(file):
     doc = docx.Document(file)
     return '\n'.join([paragraph.text for paragraph in doc.paragraphs])
 
+def extract_text_from_pdf(file):
+    """PDF dosyasından metin çıkar"""
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text()
+    return text
+
 def split_into_sentences(text: str) -> List[str]:
     """Metni cümlelere ayır"""
     # Almanca cümle sonu işaretleri
